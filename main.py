@@ -2,74 +2,15 @@ from sklearn.ensemble import RandomForestRegressor
 import pickle
 import pandas as pd
 import random
-from typing import List, Tuple, Dict
-from dataclasses import dataclass, field, asdict
+from typing import List, Tuple, Dict, Literal
 import numpy as np
 from copy import deepcopy
-import functools
+from dataclasses import asdict
 
-@dataclass(frozen=False)
-class Individual:
-    """
-    Representation of an individual
-    """
-    # passive fields
-    Orian: float	
-    COP: float
-    LPD: float
-    UvR: float
-    
-    # active fields
-    SHGC: float
-    Effi: float
-    
-    PV_1: float
-    PV_2: float
-    PV_3: float
-    PV_4: float
-
-    # compute later
-    fitness_energy: float = field(default=0)
-    fitness_cost: float = field(default=0)
-
-
-class CostMapping(object):
-    def __init__(self,
-                cost_effi_path:str,
-                cost_shgc_path:str
-            ) -> None:
-        
-        # mapping from `effi` to its cost
-        cost_effi_df = pd.read_csv(cost_effi_path)
-        self.effi2cost = {
-            cost_effi_df.at[row_ith,'Effi'].item(): cost_effi_df.at[row_ith,'Cost_Effi'].item()         
-            for row_ith in range(len(cost_effi_df))
-            }
-        self.effi2cost_keys = list(self.effi2cost.keys())
-
-        # mapping from `shgc` to its cost
-        cost_shgc_df = pd.read_csv(cost_shgc_path)
-        self.shgc2cost = {
-            cost_shgc_df.at[row_ith,'SHGC'].item(): cost_shgc_df.at[row_ith,'Cost_SHGC'].item() 
-            for row_ith in range(len(cost_shgc_df))
-            }
-        self.shgc2cost_keys = list(self.shgc2cost.keys())
-    
-    def search(self, 
-               effi_value: float, 
-               shgc_value: float
-               )->Tuple[float]:
-        effi_min_idx = np.argmin([abs(_effi - _default_effi) for _effi, _default_effi in 
-                                zip([effi_value]*len(self.effi2cost), self.effi2cost_keys)]
-                                )
-        
-        shgc_min_idx = np.argmin([abs(_shgc - _default_shgc) for _shgc, _default_shgc in 
-                                zip([shgc_value]*len(self.shgc2cost), self.shgc2cost_keys)]
-                                )
-        
-        return (self.effi2cost[self.effi2cost_keys[effi_min_idx]],
-                self.shgc2cost[self.shgc2cost_keys[shgc_min_idx]]
-        )
+from src.data_models import Individual, GA_params, get_individual_fields, get_field_min_max
+from src.utils import CostMapping
+from src.operations import GA_Operations
+from tqdm import tqdm
 
 class NSGA(CostMapping):
 
@@ -86,18 +27,22 @@ class NSGA(CostMapping):
             self.model = pickle.load(fp)
 
         # total data
-        Individual_fields = [ele for ele in list(Individual.__dataclass_fields__.keys()) 
-                             if ele != 'fitness_energy' and ele != 'fitness_cost']
-
-        self.total_data = pd.read_csv(total_data_path)[Individual_fields]
+        # self.total_data = pd.read_csv(total_data_path)[get_individual_fields(type='init')]
 
     
-    def _init_population(self)->List[Individual]:
+    def _init_population(self, population_size:int)->List[Individual]:
         """Convert data in dataframe to `Individual`"""
-        return [
-                Individual(**self.total_data.loc[row_ith].to_dict())
-                for row_ith in range(len(self.total_data))
-            ]
+        population = []
+
+        for _ in range(population_size):
+            init_params = {}
+            for k in get_individual_fields(type='init'):
+                _min_max = get_field_min_max(k)
+                assert len(_min_max) == 2
+                init_params[k] = random.uniform(_min_max['min'], _min_max['max'])
+            population.append(Individual(**init_params))
+
+        return population
 
     def _compute_individual_fitness(self, individual: Individual)->None:
         # search nearest values
@@ -172,6 +117,9 @@ class NSGA(CostMapping):
     
     @staticmethod
     def fronts_to_nondomination_rank(fronts):
+        """
+        Convert Pareto fronts to non-dominant rank as dict
+        """
         nondomination_rank_dict = {}
         for i,front in enumerate(fronts):
             for x in front:   
@@ -211,7 +159,7 @@ class NSGA(CostMapping):
                 for i in range(1,len(sorted_front)-1):
                     crowding_metrics[sorted_front[i]] += \
                         population[sorted_front[i+1]].fitness_cost - population[sorted_front[i-1]].fitness_cost
-                
+            
             # for energy
             sorted_front = sorted(front,key = lambda x : population[x].fitness_energy)
             crowding_metrics[sorted_front[0]] = np.inf
@@ -224,23 +172,63 @@ class NSGA(CostMapping):
 
         return crowding_metrics
 
+    def run_one_generation(self, 
+                           population: List[Individual], 
+                           param: GA_params
+                           )->List[Individual]:
+        # also called `Non-dominated sorting`
+        fronts = NSGA.calculate_pareto_fronts(population)
+        
+        crowding_metrics = NSGA.calculate_crowding_metrics(population,fronts)
 
+        nondomination_rank_dict = NSGA.fronts_to_nondomination_rank(fronts)
 
+        # parent selection
+        parent_indicies = GA_Operations.parent_selection(type= param.parent_selection_type,
+                                                nondomination_rank_dict= nondomination_rank_dict, 
+                                                crowding_metrics= crowding_metrics,
+                                                half_pop_size=param.half_pop_size
+                                                )
 
-    def run(self):
-        population = self._init_population()
+        parents = [population[idx] for idx in parent_indicies]
+        
+        # Offspring creation
+        offspring = []
+        for parent_ith in range(0, len(parents)//2):
+            # normal crossover in GA
+            offspring1, offspring2 = GA_Operations.crossover(
+                parent1=parents[parent_ith*2],
+                parent2=parents[parent_ith*2+1],
+                crossover_rate= param.crossover_rate
+                )
+            # normal mutation in GA
+            offspring1 = GA_Operations.mutation(offspring1, param.mutation_rate)
+            offspring2 = GA_Operations.mutation(offspring2, param.mutation_rate)
+
+            offspring.extend([offspring1, offspring2])
+
+        # get fitness values of new offsprings        
+        for indi in offspring:
+            self._compute_individual_fitness(indi)
+
+        # Combine population and offspring
+        combined_population = population + offspring
+        return combined_population
+
+    def run(self, param = GA_params()):
+        population = self._init_population(param.population_size)
 
         for indi in population:
             self._compute_individual_fitness(indi)
 
-        fronts = NSGA.calculate_pareto_fronts(population)
-        print(fronts)
-        
-        crowding_metrics = NSGA.calculate_crowding_metrics(population,fronts)
-        print(crowding_metrics)
+        for _ in tqdm(range(param.generations), total= param.generations):
+            population = self.run_one_generation(population,param)
 
-        nondomination_rank_dict = NSGA.fronts_to_nondomination_rank(fronts)
-        
+        # get final fronts
+        final_fronts = NSGA.calculate_pareto_fronts(population)
+
+        print(final_fronts)
+
 
 
 if __name__ == '__main__':
