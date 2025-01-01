@@ -79,7 +79,7 @@ def get_field_min_max(field_name:str)->Dict[str,float]:
 class GA_params:
     generations: int = 10
     population_size:int = 1000
-    half_pop_size:int = 20
+    half_pop_size:int = 200
     parent_selection_type:str = 'binary_tournament_selection'
     crossover_rate:float = 0.5
     mutation_rate:float = 0.6

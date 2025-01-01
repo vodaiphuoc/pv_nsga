@@ -8,7 +8,7 @@ from copy import deepcopy
 from dataclasses import asdict
 
 from src.data_models import Individual, GA_params, get_individual_fields, get_field_min_max
-from src.utils import CostMapping
+from src.utils import CostMapping, visualize_fronts
 from src.operations import GA_Operations
 from tqdm import tqdm
 
@@ -58,7 +58,7 @@ class NSGA(CostMapping):
         del data_dict['fitness_energy']
         del data_dict['fitness_cost']
 
-        energy_consumption = self.model.predict(pd.DataFrame(data_dict,index=[0]))
+        energy_consumption = self.model.predict(pd.DataFrame(data_dict,index=[0]).to_numpy())
 
         individual.fitness_energy = energy_consumption.item()
         individual.fitness_cost = cost_effi + cost_shgc
@@ -67,11 +67,11 @@ class NSGA(CostMapping):
     
     @staticmethod
     def _is_dominant(individual: Individual,other_individual: Individual)->bool:
-        larger_or_equal = [individual.fitness_cost >= other_individual.fitness_cost,
-                           individual.fitness_energy >= other_individual.fitness_energy]
+        larger_or_equal = [individual.fitness_cost <= other_individual.fitness_cost,
+                           individual.fitness_energy <= other_individual.fitness_energy]
         
-        larger = [individual.fitness_cost > other_individual.fitness_cost,
-                           individual.fitness_energy > other_individual.fitness_energy]
+        larger = [individual.fitness_cost < other_individual.fitness_cost,
+                           individual.fitness_energy < other_individual.fitness_energy]
 
         if np.all(larger_or_equal) and np.any(larger):
             return True
@@ -227,8 +227,7 @@ class NSGA(CostMapping):
         # get final fronts
         final_fronts = NSGA.calculate_pareto_fronts(population)
 
-        print(final_fronts)
-
+        visualize_fronts(final_fronts, population)
 
 
 if __name__ == '__main__':

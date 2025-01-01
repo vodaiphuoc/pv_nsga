@@ -1,6 +1,9 @@
-from typing import Tuple
+from typing import Tuple, List
 import numpy as np
 import pandas as pd
+from src.data_models import Individual
+import matplotlib.pyplot as plt
+import matplotlib
 
 class CostMapping(object):
     def __init__(self,
@@ -39,3 +42,24 @@ class CostMapping(object):
         return (self.effi2cost[self.effi2cost_keys[effi_min_idx]],
                 self.shgc2cost[self.shgc2cost_keys[shgc_min_idx]]
         )
+
+def visualize_fronts(fronts: List[np.ndarray], 
+                     population: List[Individual], 
+                     limit_num_fronts:int = 10):
+    if limit_num_fronts <= len(fronts):
+        fronts = fronts[:limit_num_fronts]
+    
+    colors = matplotlib.cm.rainbow(np.linspace(0, 1, len(fronts)))
+    for ith, (front, color) in enumerate(zip(fronts, colors)):
+        # x axis is `cost`
+        x_data = [ population[ith].fitness_cost for ith in front]
+        # y axis is `energy`
+        y_data = [ population[ith].fitness_energy for ith in front]
+
+        plt.scatter(x_data, y_data, color=color, label=f'front {ith+1}')
+
+    plt.xlabel('Cost')
+    plt.ylabel('Energy')
+
+    plt.legend()
+    plt.savefig('result.png')
