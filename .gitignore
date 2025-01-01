@@ -2,4 +2,4 @@
 myenv/
 *.ipynb
 *.pdf
-
+*/__pycache__/
